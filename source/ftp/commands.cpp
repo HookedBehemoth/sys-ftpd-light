@@ -1,6 +1,7 @@
 #include "commands.hpp"
 
 #include "../util/logger.hpp"
+#include "../util/time.hpp"
 
 #include <arpa/inet.h>
 #include <cerrno>
@@ -223,7 +224,7 @@ namespace ftp {
         LOG_DEBUG(args);
 
         /* open the path in LIST mode */
-        ftp_xfer_dir(session, args, XFER_DIR_LIST, true);
+        session->XferDir(args, XFER_DIR_LIST, true);
     }
 
     /*! @fn static void MDTM(ftp_session_t *session, const char *args)
@@ -282,8 +283,6 @@ namespace ftp {
      *  @param[in] args    arguments
      */
     void MKD(FTPSession *session, const char *args) {
-        Result rc;
-
         LOG_DEBUG(args);
 
         session->SetState(COMMAND_STATE, 0);
@@ -318,7 +317,7 @@ namespace ftp {
         LOG_DEBUG(args);
 
         /* open the path in MLSD mode */
-        ftp_xfer_dir(session, args, XFER_DIR_MLSD, true);
+        session->XferDir(args, XFER_DIR_MLSD, true);
     }
 
     /*! @fn static void MLST(ftp_session_t *session, const char *args)
@@ -340,9 +339,10 @@ namespace ftp {
         }
 
         /* stat path */
-        rc = lstat(session->buffer, &st);
-        if (rc != 0) {
-            session->SendResponse(550, "%s\r\n", strerror(errno));
+        FsDirEntryType type;
+        Result rc = session->m_sdmcFs->GetEntryType(session->buffer, &type);
+        if (R_FAILED(rc)) {
+            session->SendResponse(550, "0x%x\r\n", rc);
             return;
         }
 
@@ -355,14 +355,14 @@ namespace ftp {
         }
 
         session->dir_mode = XFER_DIR_MLST;
-        rc = ftp_session_fill_dirent(session, &st, path, len);
+        rc = session->FillDirent(path, len);
         free(path);
         if (rc != 0) {
             session->SendResponse(550, "%s\r\n", strerror(errno));
             return;
         }
 
-        path = malloc(session->buffersize + 1);
+        path = (char *)malloc(session->buffersize + 1);
         if (!path) {
             session->SendResponse(550, "%s\r\n", strerror(ENOMEM));
             return;
@@ -408,7 +408,7 @@ namespace ftp {
         LOG_DEBUG(args);
 
         /* open the path in NLST mode */
-        return ftp_xfer_dir(session, args, XFER_DIR_NLST, false);
+        return session->XferDir(args, XFER_DIR_NLST, false);
     }
 
     /*! @fn static void NOOP(ftp_session_t *session, const char *args)
@@ -945,7 +945,7 @@ namespace ftp {
         }
 
         /* rename the file */
-        Result rc;
+        Result rc = ResultSuccess();
         if (session->rn_type == FsDirEntryType_Dir) {
             rc = session->m_sdmcFs->RenameDirectory(rnfr, session->buffer);
         } else if (session->rn_type == FsDirEntryType_File) {
@@ -1012,7 +1012,7 @@ namespace ftp {
     void STAT(FTPSession *session, const char *args) {
         u64 cur_time;
         timeGetCurrentTime(TimeType_Default, &cur_time);
-        u64 uptime = cur_time - start_time;
+        u64 uptime = cur_time - hos::time::GetStart();
         u64 hours = uptime / 3600;
         u64 minutes = (uptime / 60) % 60;
         u64 seconds = uptime % 60;
@@ -1044,7 +1044,7 @@ namespace ftp {
         }
 
         /* argument provided, open the path in STAT mode */
-        ftp_xfer_dir(session, args, XFER_DIR_STAT, false);
+        session->XferDir(args, XFER_DIR_STAT, false);
     }
 
     /*! @fn static void STOR(ftp_session_t *session, const char *args)

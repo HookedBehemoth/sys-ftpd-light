@@ -1,7 +1,6 @@
 #pragma once
 
 #include "../common.hpp"
-#include "ftp.hpp"
 
 enum LoopStatus : u8 {
     CONTINUE,
@@ -68,53 +67,6 @@ enum session_mlst_flags_t : u8 {
 
 /*! socket buffersize */
 constexpr static inline int sock_buffersize = SOCK_BUFFERSIZE;
-static inline u64 start_time;
-
-struct Socket {
-    Socket();
-    Result Close();
-    Result SetNonBlocking();
-    Result SetOptions();
-
-    int fd;
-    bool connected;
-};
-
-/*! encode a path
- *
- *  @param[in]     path   path to encode
- *  @param[in,out] len    path length
- *  @param[in]     quotes whether to encode quotes
- *
- *  @returns encoded path
- *
- *  @note The caller must free the returned path
- */
-char *encode_path(const char *path, size_t *len, bool quotes);
-
-/*! validate a path
- *
- *  @param[in] args path to validate
- */
-int validate_path(const char *args);
-
-/*! send a file to the client
- *
- *  @param[in] session ftp session
- *
- *  @returns whether to call again
- */
-LoopStatus retrieve_transfer(FTPSession *session);
-
-/*! send a file to the client
- *
- *  @param[in] session ftp session
- *
- *  @returns whether to call again
- */
-LoopStatus store_transfer(FTPSession *session);
-
-Result UpdateFreeSpace(IFileSystem *fs);
 
 namespace ftp {
 

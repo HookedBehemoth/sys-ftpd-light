@@ -1,4 +1,4 @@
-#include "types.hpp"
+#include "utl.hpp"
 
 #include "../util/logger.hpp"
 
@@ -174,95 +174,6 @@ int validate_path(const char *args) {
         return -1;
 
     return 0;
-}
-
-LoopStatus retrieve_transfer(FTPSession *session) {
-    ssize_t rc;
-
-    if (session->bufferpos == session->buffersize) {
-        /* we have sent all the data so read some more */
-        rc = session->ReadFile();
-        if (rc <= 0) {
-            /* can't read any more data */
-            session->SetState(COMMAND_STATE, CLOSE_PASV | CLOSE_DATA);
-            if (rc < 0) {
-                session->SendResponse(451, "Failed to read file\r\n");
-            } else {
-                session->SendResponse(226, "OK\r\n");
-            }
-            return LoopStatus::EXIT;
-        }
-
-        /* we read some data so reset the session buffer to send */
-        session->bufferpos = 0;
-        session->buffersize = rc;
-    }
-
-    /* send any pending data */
-    size_t send_size = session->buffersize - session->bufferpos;
-    if (send_size > 0x1000)
-        send_size = 0x1000;
-    rc = send(session->dataSocket.fd, session->buffer + session->bufferpos, send_size, 0);
-    if (rc <= 0) {
-        /* error sending data */
-        if (rc < 0) {
-            if (errno == EWOULDBLOCK)
-                return LoopStatus::EXIT;
-            LOG("send: %d %s\n", errno, strerror(errno));
-        } else {
-            LOG("send: %d %s\n", ECONNRESET, strerror(ECONNRESET));
-        }
-
-        session->SetState(COMMAND_STATE, CLOSE_PASV | CLOSE_DATA);
-        session->SendResponse(426, "Connection broken during transfer\r\n");
-        return LoopStatus::EXIT;
-    }
-
-    /* we can try to send more data */
-    session->bufferpos += rc;
-    return LoopStatus::CONTINUE;
-}
-
-LoopStatus store_transfer(FTPSession *session) {
-    ssize_t res;
-
-    if (session->bufferpos == session->buffersize) {
-        /* we have written all the received data, so try to get some more */
-        res = recv(session->dataSocket.fd, session->buffer, sizeof(session->buffer), 0);
-        if (res <= 0) {
-            /* can't read any more data */
-            if (res < 0) {
-                if (errno == EWOULDBLOCK)
-                    return LoopStatus::EXIT;
-                LOG("recv: %d %s\n", errno, strerror(errno));
-            }
-
-            session->SetState(COMMAND_STATE, CLOSE_PASV | CLOSE_DATA);
-
-            if (res == 0) {
-                session->SendResponse(226, "OK\r\n");
-            } else {
-                session->SendResponse(426, "Connection broken during transfer\r\n");
-            }
-            return LoopStatus::EXIT;
-        }
-
-        /* we received some data so reset the session buffer to write */
-        session->bufferpos = 0;
-        session->buffersize = res;
-    }
-
-    u64 written = session->WriteFile();
-    if (written <= 0) {
-        /* error writing data */
-        session->SetState(COMMAND_STATE, CLOSE_PASV | CLOSE_DATA);
-        session->SendResponse(451, "Failed to write file\r\n");
-        return LoopStatus::EXIT;
-    }
-
-    /* we can try to receive more data */
-    session->bufferpos += written;
-    return LoopStatus::CONTINUE;
 }
 
 Result UpdateFreeSpace(IFileSystem *fs) {

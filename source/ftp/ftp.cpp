@@ -244,7 +244,7 @@ Result FTPSession::Connect() {
 }
 
 Result FTPSession::BuildPath(const char *cwd, const char *args) {
-    int rc;
+    size_t rc;
     char *p;
 
     this->buffersize = 0;
@@ -436,13 +436,13 @@ void FTPSession::ReadCommand(int events) {
             /* look up the command */
             const char *key = buffer;
             LOG_DEBUG("key: %s", key);
-            ftp::Command *command = std::find_if(ftp::commands.begin(), ftp::commands.end(), [&](const ftp::Command &cmd) -> bool {
+            const ftp::Command *command = std::find_if(ftp::commands.begin(), ftp::commands.end(), [&](const ftp::Command &cmd) -> bool {
                 LOG("searching: %s", cmd.name);
                 return strcasecmp(cmd.name, key) == 0;
             });
 
             /* update command timestamp */
-            this->timestamp = time(NULL);
+            timeGetCurrentTime(TimeType_Default, &this->timestamp);
 
             /* execute the command */
             if (command == NULL) {
@@ -518,7 +518,7 @@ void FTPSession::DecodePath(size_t length) {
 void FTPSession::Transfer() {
     LoopStatus rc;
     do {
-        rc = this->transfer(this);
+        rc = (this->*transfer)();
     } while (rc == LoopStatus::CONTINUE);
 }
 
@@ -550,7 +550,6 @@ void FTPSession::SetState(session_state_t state, int flags) {
  *  @returns whether to call again
  */
 LoopStatus FTPSession::ListTransfer() {
-    static FsDirectoryEntry entries[0x10];
     ssize_t rc;
     size_t len;
     char *buffer;
@@ -572,9 +571,10 @@ LoopStatus FTPSession::ListTransfer() {
         }
 
         /* get the next directory entry */
-        s64 total;
-        this->m_dir->Read(&total, 0x10, entries);
-        if (total == 0) {
+        FsDirectoryEntry entry;
+        s64 read;
+        this->m_dir->Read(&read, 1, &entry);
+        if (read == 0) {
             /* we have exhausted the directory listing */
             this->SetState(COMMAND_STATE, CLOSE_PASV | CLOSE_DATA);
             this->SendResponse(rc, "OK\r\n");
@@ -585,7 +585,7 @@ LoopStatus FTPSession::ListTransfer() {
         if (this->dir_mode == XFER_DIR_NLST) {
             /* NLST gives the whole path name */
             this->buffersize = 0;
-            if (this->BuildPath(this->lwd, dent->d_name) == 0) {
+            if (this->BuildPath(this->lwd, entry.name) == 0) {
                 /* encode \n in path */
                 len = this->buffersize;
                 buffer = encode_path(this->buffer, &len, false);
@@ -599,24 +599,11 @@ LoopStatus FTPSession::ListTransfer() {
                 }
             }
         } else {
-            /* lstat the entry */
-            if ((rc = this->BuildPath(this->lwd, dent->d_name)) != 0) {
-                LOG("build_path: %d %s\n", errno, strerror(errno));
-            } else if ((rc = lstat(this->buffer, &st)) != 0) {
-                LOG("stat '%s': %d %s\n", this->buffer, errno, strerror(errno));
-            }
-
-            if (rc != 0) {
-                /* an error occurred */
-                this->SetState(COMMAND_STATE, CLOSE_PASV | CLOSE_DATA);
-                this->SendResponse(550, "unavailable\r\n");
-                return LoopStatus::EXIT;
-            }
             /* encode \n in path */
-            len = strlen(dent->d_name);
-            buffer = encode_path(dent->d_name, &len, false);
+            len = strlen(entry.name);
+            buffer = encode_path(entry.name, &len, false);
             if (buffer != NULL) {
-                rc = ftp_session_fill_dirent(session, &st, buffer, len);
+                rc = this->FillDirent(buffer, len);
                 free(buffer);
                 if (rc != 0) {
                     this->SetState(COMMAND_STATE, CLOSE_PASV | CLOSE_DATA);
@@ -652,6 +639,186 @@ LoopStatus FTPSession::ListTransfer() {
     return LoopStatus::CONTINUE;
 }
 
+/*! fill directory entry
+ *
+ *  @param[in] path    path to file
+ *  @param[in] len     path length
+ *
+ *  @returns result
+ */
+Result FTPSession::FillDirent(const char *path, int len) {
+    this->buffersize = 0;
+    s64 size;
+
+    FsDirEntryType type;
+    R_TRY(this->m_sdmcFs->GetEntryType(path, &type));
+
+    FsTimeStampRaw timestamp;
+    R_TRY(this->m_sdmcFs->GetFileTimeStampRaw(buffer, &timestamp));
+
+    if (type == FsDirEntryType_File) {
+        std::unique_ptr<IFile> file;
+        R_TRY(this->m_sdmcFs->OpenFile(path, FsOpenMode_Read, &file));
+        R_TRY(file->GetSize(&size));
+    }
+
+    if (this->dir_mode == XFER_DIR_MLSD || this->dir_mode == XFER_DIR_MLST) {
+        if (this->dir_mode == XFER_DIR_MLST)
+            this->buffer[this->buffersize++] = ' ';
+
+        if (this->mlst_flags & SESSION_MLST_TYPE) {
+            /* type fact */
+            const char *typeStr;
+            if (type == FsDirEntryType_File) {
+                typeStr = "file";
+            } else if (type == FsDirEntryType_Dir) {
+                typeStr = "dir";
+            } else {
+                typeStr = "???";
+            }
+
+            this->buffersize += sprintf(this->buffer + this->buffersize, "Type=%s;", typeStr);
+        }
+
+        if (this->mlst_flags & SESSION_MLST_SIZE) {
+            /* size fact */
+            this->buffersize += sprintf(this->buffer + this->buffersize, "Size=%ld;", size);
+        }
+
+        if (this->mlst_flags & SESSION_MLST_MODIFY) {
+            /* mtime fact */
+            struct tm *tm = gmtime((time_t *)&timestamp.modified);
+            if (tm == NULL)
+                return errno;
+
+            this->buffersize +=
+                strftime(this->buffer + this->buffersize,
+                         sizeof(this->buffer) - this->buffersize,
+                         "Modify=%Y%m%d%H%M%S;", tm);
+            if (this->buffersize == 0)
+                return EOVERFLOW;
+        }
+
+        if (this->mlst_flags & SESSION_MLST_PERM) {
+            /* permission fact */
+            strcpy(this->buffer + this->buffersize, "Perm=");
+            this->buffersize += strlen("Perm=");
+
+            /* append permission */
+            if ((type == FsDirEntryType_File))
+                this->buffer[this->buffersize++] = 'a';
+
+            /* create permission */
+            if ((type == FsDirEntryType_Dir))
+                this->buffer[this->buffersize++] = 'c';
+
+            /* delete permission */
+            this->buffer[this->buffersize++] = 'd';
+
+            /* chdir permission */
+            if ((type == FsDirEntryType_Dir))
+                this->buffer[this->buffersize++] = 'e';
+
+            /* rename permission */
+            this->buffer[this->buffersize++] = 'f';
+
+            /* list permission */
+            if ((type == FsDirEntryType_Dir))
+                this->buffer[this->buffersize++] = 'l';
+
+            /* mkdir permission */
+            if ((type == FsDirEntryType_Dir))
+                this->buffer[this->buffersize++] = 'm';
+
+            /* delete permission */
+            if ((type == FsDirEntryType_Dir))
+                this->buffer[this->buffersize++] = 'p';
+
+            /* read permission */
+            if ((type == FsDirEntryType_File))
+                this->buffer[this->buffersize++] = 'r';
+
+            /* write permission */
+            if ((type == FsDirEntryType_File))
+                this->buffer[this->buffersize++] = 'w';
+
+            this->buffer[this->buffersize++] = ';';
+        }
+
+        if (this->mlst_flags & SESSION_MLST_UNIX_MODE) {
+            /* unix mode fact */
+            this->buffersize += sprintf(this->buffer + this->buffersize, "UNIX.mode=0777;");
+        }
+
+        /* make sure space precedes name */
+        if (this->buffer[this->buffersize - 1] != ' ')
+            this->buffer[this->buffersize++] = ' ';
+    } else if (this->dir_mode != XFER_DIR_NLST) {
+        if (this->dir_mode == XFER_DIR_STAT)
+            this->buffer[this->buffersize++] = ' ';
+
+        /* perms nlinks owner group size */
+        const char *perms = (type == FsDirEntryType_File) ? "-rw-rw-rw-" : "drwxrwxrwx";
+        this->buffersize +=
+            sprintf(this->buffer + this->buffersize,
+                    "%s 1 NX NX %ld ", perms, size);
+
+        /* timestamp */
+        struct tm *tm = gmtime((time_t *)&timestamp.modified);
+        if (tm) {
+            const char *fmt = "%b %e %Y ";
+            if (this->timestamp > timestamp.modified && this->timestamp - timestamp.modified < (60 * 60 * 24 * 365 / 2)) {
+                fmt = "%b %e %H:%M ";
+            }
+
+            this->buffersize +=
+                strftime(this->buffer + this->buffersize,
+                         sizeof(this->buffer) - this->buffersize,
+                         fmt, tm);
+        } else {
+            this->buffersize +=
+                sprintf(this->buffer + this->buffersize, "Jan 1 1970 ");
+        }
+    }
+
+    if (this->buffersize + len + 2 > sizeof(this->buffer)) {
+        /* buffer will overflow */
+        return EOVERFLOW;
+    }
+
+    /* copy path */
+    memcpy(this->buffer + this->buffersize, path, len);
+    len = this->buffersize + len;
+    this->buffer[len++] = '\r';
+    this->buffer[len++] = '\n';
+    this->buffersize = len;
+
+    return 0;
+}
+
+/*! fill cdir directory entry
+ *
+ *  @param[in] path    path to fill
+ *
+ *  @returns result
+ */
+Result FTPSession::FillDirentCdir(const char *path) {
+    char *buffer;
+    size_t len;
+
+    /* encode \n in path */
+    len = strlen(path);
+    buffer = encode_path(path, &len, false);
+    if (!buffer)
+        return ENOMEM;
+
+    /* fill dirent with listed directory as type=cdir */
+    Result rc = this->FillDirent(path, len);
+    free(buffer);
+
+    return rc;
+}
+
 /*! Transfer a directory
  *
  *  @param[in] args       ftp arguments
@@ -668,7 +835,7 @@ void FTPSession::XferDir(const char *args, xfer_dir_mode_t mode, bool workaround
     this->flags &= ~SESSION_RECV;
     this->flags |= SESSION_SEND;
 
-    this->transfer = this->ListTransfer;
+    this->transfer = &FTPSession::ListTransfer;
     this->buffersize = 0;
     this->bufferpos = 0;
 
@@ -727,7 +894,7 @@ void FTPSession::XferDir(const char *args, xfer_dir_mode_t mode, bool workaround
             }
 
             if (buffer) {
-                rc = ftp_session_fill_dirent(session, &st, buffer, len);
+                rc = this->FillDirent(buffer, len);
                 free(buffer);
             } else
                 rc = ENOMEM;
@@ -745,7 +912,7 @@ void FTPSession::XferDir(const char *args, xfer_dir_mode_t mode, bool workaround
 
             if (this->dir_mode == XFER_DIR_MLSD && (this->mlst_flags & SESSION_MLST_TYPE)) {
                 /* send this directory as type=cdir */
-                rc = ftp_session_fill_dirent_cdir(session, this->lwd);
+                rc = this->FillDirentCdir(this->lwd);
                 if (rc != 0) {
                     this->SetState(COMMAND_STATE, CLOSE_PASV | CLOSE_DATA);
                     this->SendResponse(550, "%s\r\n", strerror(rc));
@@ -753,7 +920,7 @@ void FTPSession::XferDir(const char *args, xfer_dir_mode_t mode, bool workaround
                 }
             }
         }
-    } else if (ftp_session_open_cwd(session) != 0) {
+    } else if (R_FAILED(this->OpenCWD())) {
         /* no argument, but opening cwd failed */
         this->SetState(COMMAND_STATE, CLOSE_PASV | CLOSE_DATA);
         this->SendResponse(550, "%s\r\n", strerror(errno));
@@ -765,7 +932,7 @@ void FTPSession::XferDir(const char *args, xfer_dir_mode_t mode, bool workaround
 
         if (this->dir_mode == XFER_DIR_MLSD && (this->mlst_flags & SESSION_MLST_TYPE)) {
             /* send this directory as type=cdir */
-            rc = ftp_session_fill_dirent_cdir(session, this->lwd);
+            rc = this->FillDirentCdir(this->lwd);
             if (rc != 0) {
                 this->SetState(COMMAND_STATE, CLOSE_PASV | CLOSE_DATA);
                 this->SendResponse(550, "%s\r\n", strerror(rc));
@@ -800,6 +967,17 @@ void FTPSession::XferDir(const char *args, xfer_dir_mode_t mode, bool workaround
     /* we must have got LIST/MLSD/MLST/NLST without a preceding PORT or PASV */
     this->SetState(COMMAND_STATE, CLOSE_PASV | CLOSE_DATA);
     this->SendResponse(503, "Bad sequence of commands\r\n");
+}
+
+Result FTPSession::OpenCWD() {
+    /* open current working directory */
+    Result rc = this->m_sdmcFs->OpenDirectory(this->cwd, FsDirOpenMode_ReadDirs | FsDirOpenMode_ReadFiles, &this->m_dir);
+    if (R_FAILED(rc)) {
+        LOG("opendir '%s': %d %s\n", this->cwd, errno, strerror(errno));
+        return rc;
+    }
+
+    return 0;
 }
 
 /*! Transfer a file
@@ -852,10 +1030,10 @@ void FTPSession::XferFile(const char *args, xfer_file_mode_t mode) {
         this->flags &= ~(SESSION_RECV | SESSION_SEND);
         if (mode == XFER_FILE_RETR) {
             this->flags |= SESSION_SEND;
-            this->transfer = retrieve_transfer;
+            this->transfer = &FTPSession::RetreiveTransfer;
         } else {
             this->flags |= SESSION_RECV;
-            this->transfer = store_transfer;
+            this->transfer = &FTPSession::StoreTransfer;
         }
 
         this->bufferpos = 0;
@@ -968,6 +1146,95 @@ u64 FTPSession::ReadFile() {
     return read;
 }
 
+LoopStatus FTPSession::RetreiveTransfer() {
+    ssize_t rc;
+
+    if (this->bufferpos == this->buffersize) {
+        /* we have sent all the data so read some more */
+        rc = this->ReadFile();
+        if (rc <= 0) {
+            /* can't read any more data */
+            this->SetState(COMMAND_STATE, CLOSE_PASV | CLOSE_DATA);
+            if (rc < 0) {
+                this->SendResponse(451, "Failed to read file\r\n");
+            } else {
+                this->SendResponse(226, "OK\r\n");
+            }
+            return LoopStatus::EXIT;
+        }
+
+        /* we read some data so reset the session buffer to send */
+        this->bufferpos = 0;
+        this->buffersize = rc;
+    }
+
+    /* send any pending data */
+    size_t send_size = this->buffersize - this->bufferpos;
+    if (send_size > 0x1000)
+        send_size = 0x1000;
+    rc = send(this->dataSocket.fd, this->buffer + this->bufferpos, send_size, 0);
+    if (rc <= 0) {
+        /* error sending data */
+        if (rc < 0) {
+            if (errno == EWOULDBLOCK)
+                return LoopStatus::EXIT;
+            LOG("send: %d %s\n", errno, strerror(errno));
+        } else {
+            LOG("send: %d %s\n", ECONNRESET, strerror(ECONNRESET));
+        }
+
+        this->SetState(COMMAND_STATE, CLOSE_PASV | CLOSE_DATA);
+        this->SendResponse(426, "Connection broken during transfer\r\n");
+        return LoopStatus::EXIT;
+    }
+
+    /* we can try to send more data */
+    this->bufferpos += rc;
+    return LoopStatus::CONTINUE;
+}
+
+LoopStatus FTPSession::StoreTransfer() {
+    ssize_t res;
+
+    if (this->bufferpos == this->buffersize) {
+        /* we have written all the received data, so try to get some more */
+        res = recv(this->dataSocket.fd, this->buffer, sizeof(this->buffer), 0);
+        if (res <= 0) {
+            /* can't read any more data */
+            if (res < 0) {
+                if (errno == EWOULDBLOCK)
+                    return LoopStatus::EXIT;
+                LOG("recv: %d %s\n", errno, strerror(errno));
+            }
+
+            this->SetState(COMMAND_STATE, CLOSE_PASV | CLOSE_DATA);
+
+            if (res == 0) {
+                this->SendResponse(226, "OK\r\n");
+            } else {
+                this->SendResponse(426, "Connection broken during transfer\r\n");
+            }
+            return LoopStatus::EXIT;
+        }
+
+        /* we received some data so reset the session buffer to write */
+        this->bufferpos = 0;
+        this->buffersize = res;
+    }
+
+    u64 written = this->WriteFile();
+    if (written <= 0) {
+        /* error writing data */
+        this->SetState(COMMAND_STATE, CLOSE_PASV | CLOSE_DATA);
+        this->SendResponse(451, "Failed to write file\r\n");
+        return LoopStatus::EXIT;
+    }
+
+    /* we can try to receive more data */
+    this->bufferpos += written;
+    return LoopStatus::CONTINUE;
+}
+
 /*! send ftp response to ftp session's peer
  *
  *  @param[in] code    response code
@@ -1026,7 +1293,6 @@ void FTPSession::SendResponseBuffer(const char *buffer, size_t len) {
 
 FTP::FTP(std::shared_ptr<IFileSystem> &sdmcFs)
     : m_sdmcFs(sdmcFs), serv_addr(), listenSocket() {
-    timeGetCurrentTime(TimeType_Default, &start_time);
 }
 
 FTP::~FTP() {}

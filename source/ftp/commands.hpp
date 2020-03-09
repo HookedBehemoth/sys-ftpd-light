@@ -45,7 +45,7 @@ namespace ftp {
         void (*handler)(FTPSession *session, const char *); /*!< command callback */
     };
 
-    std::array<Command, 40> commands{{
+    constexpr static inline const std::array<Command, 40> commands{{
         {"ABOR", ABOR},
         {"ALLO", ALLO},
         {"APPE", APPE},

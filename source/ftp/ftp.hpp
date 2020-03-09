@@ -2,19 +2,20 @@
 #include "../common.hpp"
 #include "../fs.hpp"
 #include "types.hpp"
+#include "utl.hpp"
 
 #include <arpa/inet.h>
 
 class FTPSession {
   public:
     char cwd[FS_MAX_PATH];
-    char lwd[4096];
+    char lwd[FS_MAX_PATH];
     struct sockaddr_in peer_addr;
     struct sockaddr_in pasv_addr;
     Socket cmdSocket;
     Socket pasvSocket;
     Socket dataSocket;
-    time_t timestamp;
+    u64 timestamp;
     u32 flags; /*! session_flags_t */
     xfer_dir_mode_t dir_mode;
     u32 mlst_flags; /*! session_mlst_flags_t*/
@@ -23,7 +24,7 @@ class FTPSession {
     FTPSession *next;
     FTPSession *prev;
 
-    LoopStatus (*transfer)(FTPSession *);
+    LoopStatus (FTPSession::*transfer)();
     char buffer[XFER_BUFFERSIZE];
     char file_buffer[FILE_BUFFERSIZE];
     char cmd_buffer[CMD_BUFFERSIZE];
@@ -52,13 +53,19 @@ class FTPSession {
     void Transfer();
     void SetState(session_state_t state, int flags);
     LoopStatus ListTransfer();
+    Result FillDirent(const char *path, int len);
+    Result FillDirentCdir(const char *path);
 
     void XferDir(const char *args, xfer_dir_mode_t mode, bool workaround);
+    Result OpenCWD();
     void XferFile(const char *args, xfer_file_mode_t mode);
     Result OpenFileRead();
     Result OpenFileWrite(bool append);
     u64 WriteFile();
     u64 ReadFile();
+
+    LoopStatus RetreiveTransfer();
+    LoopStatus StoreTransfer();
 
     void SendResponse(int code, const char *fmt, ...) __attribute__((format(printf, 3, 4)));
     void SendResponseBuffer(const char *buffer, size_t len);

@@ -5,6 +5,7 @@ namespace hos::time {
 
     namespace {
         TimeZoneRule rule;
+        u64 start_time;
     }
 
     Result Initialize() {
@@ -13,7 +14,13 @@ namespace hos::time {
 
         R_TRY(timeLoadTimeZoneRule(&locName, &rule));
 
+        R_TRY(timeGetCurrentTime(TimeType_Default, &start_time));
+
         return ResultSuccess();
+    }
+    
+    u64 GetStart() {
+        return start_time;
     }
 
     Result TimestampToCalendarTime(TimeCalendarTime *datetime, u64 timestamp) {
