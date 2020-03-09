@@ -19,7 +19,7 @@ include $(DEVKITPRO)/libnx/switch_rules
 #---------------------------------------------------------------------------------
 TARGET		:=	sys-ftpd
 BUILD		:=	build
-SOURCES		:=	source
+SOURCES		:=	source source/fs source/util source/ftp
 DATA		:=	data
 INCLUDES	:=	include
 EXEFS_SRC	:=	exefs_src
@@ -33,9 +33,9 @@ ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 CFLAGS	:=	-g -Wall -O2 -ffunction-sections \
 			$(ARCH) $(DEFINES)
 
-CFLAGS	+=	$(INCLUDE) -D__SWITCH__
+CFLAGS	+=	$(INCLUDE) -D__SWITCH__ -D__APPLET__
 
-CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions -std=gnu++11
+CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions -std=gnu++17
 
 ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
@@ -132,13 +132,15 @@ DEPENDS	:=	$(OFILES:.o=.d)
 #---------------------------------------------------------------------------------
 # main targets
 #---------------------------------------------------------------------------------
-all	:	$(OUTPUT).nsp
+all	:	$(OUTPUT).nsp $(OUTPUT).nro
 
 ifeq ($(strip $(APP_JSON)),)
 $(OUTPUT).nsp	:	$(OUTPUT).nso
 else
 $(OUTPUT).nsp	:	$(OUTPUT).nso $(OUTPUT).npdm
 endif
+
+$(OUTPUT).nro	:	$(OUTPUT).elf
 
 $(OUTPUT).nso	:	$(OUTPUT).elf
 

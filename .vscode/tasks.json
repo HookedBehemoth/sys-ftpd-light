@@ -27,6 +27,31 @@
             }
         },
         {
+            "label": "Build and debug",
+            "type": "shell",
+            "promptOnClose": true,
+            "command": "make -j8 && nxlink -a 192.168.10.13 -s *.nro",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": {
+                "owner": "cpp",
+                "pattern": {
+                    "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+                    "file": 1,
+                    "line": 2,
+                    "column": 3,
+                    "severity": 4,
+                    "message": 5
+                }
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
             "label": "Clean",
             "type": "shell",
             "promptOnClose": true,
