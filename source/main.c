@@ -40,6 +40,7 @@ void __appInit(void)
     R_ASSERT(fsInitialize());
     R_ASSERT(fsdevMountSdmc());
     R_ASSERT(timeInitialize());
+    R_ASSERT(hidsysInitialize());
 
     static const SocketInitConfig socketInitConfig = {
         .bsdsockets_version = 1,
@@ -62,6 +63,7 @@ void __appInit(void)
 void __appExit(void)
 {
     socketExit();
+    hidsysExit();
     timeExit();
     fsdevUnmountAll();
     fsExit();

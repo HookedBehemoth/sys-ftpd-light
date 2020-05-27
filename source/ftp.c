@@ -403,7 +403,7 @@ ftp_closesocket(int fd,
     linger.l_onoff = 1;
     linger.l_linger = 0;
     setsockopt(fd, SOL_SOCKET, SO_LINGER,
-                    &linger, sizeof(linger));
+               &linger, sizeof(linger));
 
     /* close socket */
     close(fd);
@@ -820,22 +820,8 @@ ftp_session_fill_dirent_type(ftp_session_t* session, const struct stat* st,
         /* perms nlinks owner group size */
         session->buffersize +=
             sprintf(session->buffer + session->buffersize,
-                    "%c%c%c%c%c%c%c%c%c%c %lu 3DS 3DS %lld ",
-                    S_ISREG(st->st_mode) ? '-' : S_ISDIR(st->st_mode) ? 'd' :
-#if !defined(_3DS) && !defined(__SWITCH__)
-                                                                      S_ISLNK(st->st_mode) ? 'l' : S_ISCHR(st->st_mode) ? 'c' : S_ISBLK(st->st_mode) ? 'b' : S_ISFIFO(st->st_mode) ? 'p' : S_ISSOCK(st->st_mode) ? 's' :
-#endif
-                                                                                                                                                                                                                 '?',
-                    st->st_mode & S_IRUSR ? 'r' : '-',
-                    st->st_mode & S_IWUSR ? 'w' : '-',
-                    st->st_mode & S_IXUSR ? 'x' : '-',
-                    st->st_mode & S_IRGRP ? 'r' : '-',
-                    st->st_mode & S_IWGRP ? 'w' : '-',
-                    st->st_mode & S_IXGRP ? 'x' : '-',
-                    st->st_mode & S_IROTH ? 'r' : '-',
-                    st->st_mode & S_IWOTH ? 'w' : '-',
-                    st->st_mode & S_IXOTH ? 'x' : '-',
-                    (unsigned long)st->st_nlink,
+                    "%s 1 NX NX %lld ",
+                    S_ISREG(st->st_mode) ? "-rw-rw-rw-" : S_ISDIR(st->st_mode) ? "drwxrwxrwx" : "?---------",
                     (signed long long)st->st_size);
 
         /* timestamp */
@@ -1098,7 +1084,6 @@ ftp_send_response(ftp_session_t* session,
     if (rc >= sizeof(buffer))
     {
         /* couldn't fit message; just send code */
-        
         if (code > 0)
             rc = sprintf(buffer, "%d \r\n", code);
         else
@@ -1202,7 +1187,6 @@ ftp_session_new(int listen_fd)
     rc = getsockname(new_fd, (struct sockaddr*)&session->pasv_addr, &addrlen);
     if (rc != 0)
     {
-        
         ftp_send_response(session, 451, "Failed to get connection info\r\n");
         ftp_session_destroy(session);
         return -1;
@@ -1360,7 +1344,6 @@ ftp_session_read_command(ftp_session_t* session,
         atmark = sockatmark(session->cmd_fd);
         if (atmark < 0)
         {
-            
             ftp_session_close_cmd(session);
             return;
         }
@@ -1371,7 +1354,6 @@ ftp_session_read_command(ftp_session_t* session,
             rc = recv(session->cmd_fd, session->cmd_buffer, sizeof(session->cmd_buffer), 0);
             if (rc < 0 && errno != EWOULDBLOCK)
             {
-                
                 ftp_session_close_cmd(session);
             }
 
@@ -1387,7 +1369,6 @@ ftp_session_read_command(ftp_session_t* session,
                 return;
 
             /* error retrieving out-of-band data */
-            
             ftp_session_close_cmd(session);
             return;
         }
@@ -1403,7 +1384,6 @@ ftp_session_read_command(ftp_session_t* session,
     if (len == 0)
     {
         /* error retrieving command */
-        
         ftp_session_close_cmd(session);
         return;
     }
@@ -1413,7 +1393,6 @@ ftp_session_read_command(ftp_session_t* session,
     if (rc < 0)
     {
         /* error retrieving command */
-        
         ftp_session_close_cmd(session);
         return;
     }
@@ -1613,7 +1592,6 @@ ftp_session_poll(ftp_session_t* session)
     rc = poll(pollinfo, nfds, 0);
     if (rc < 0)
     {
-        
         ftp_session_close_cmd(session);
     }
     else if (rc > 0)
@@ -1711,7 +1689,6 @@ update_status(void)
     rc = gethostname(hostname, sizeof(hostname));
     if (rc != 0)
     {
-        
         return -1;
     }
     console_set_status("\n" GREEN STATUS_STRING " test "
@@ -1730,14 +1707,12 @@ update_status(void)
     rc = getsockname(listenfd, (struct sockaddr*)&serv_addr, &addrlen);
     if (rc != 0)
     {
-        
         return -1;
     }
 
     rc = gethostname(hostname, sizeof(hostname));
     if (rc != 0)
     {
-        
         return -1;
     }
 
@@ -1827,7 +1802,6 @@ int ftp_init(void)
     listenfd = socket(AF_INET, SOCK_STREAM, 0);
     if (listenfd < 0)
     {
-        
         ftp_exit();
         return -1;
     }
@@ -1836,7 +1810,7 @@ int ftp_init(void)
     serv_addr.sin_family = AF_INET;
 
     serv_addr.sin_addr.s_addr = INADDR_ANY;
-    serv_addr.sin_port = LISTEN_PORT;
+    serv_addr.sin_port = htons(LISTEN_PORT);
 
     /* reuse address */
     {
@@ -1844,7 +1818,6 @@ int ftp_init(void)
         rc = setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
         if (rc != 0)
         {
-            
             ftp_exit();
             return -1;
         }
@@ -1854,7 +1827,6 @@ int ftp_init(void)
     rc = bind(listenfd, (struct sockaddr*)&serv_addr, sizeof(serv_addr));
     if (rc != 0)
     {
-        
         ftp_exit();
         return -1;
     }
@@ -1863,7 +1835,6 @@ int ftp_init(void)
     rc = listen(listenfd, 5);
     if (rc != 0)
     {
-        
         ftp_exit();
         return -1;
     }
@@ -1916,12 +1887,10 @@ ftp_loop(void)
     if (rc < 0)
     {
         /* wifi got disabled */
-        
 
         if (errno == ENETDOWN)
             return LOOP_RESTART;
 
-        
         return LOOP_EXIT;
     }
     else if (rc > 0)
@@ -1936,7 +1905,6 @@ ftp_loop(void)
         }
         else
         {
-            
         }
     }
 
@@ -2185,13 +2153,13 @@ list_transfer(ftp_session_t* session)
                     getmtime = false;
 
                 if ((rc = build_path(session, session->lwd, dent->d_name)) != 0)
-                    
-                else if (getmtime)
-                {
-                    uint64_t mtime = 0;
-                    if ((rc = sdmc_getmtime(session->buffer, &mtime)) == 0)
-                        st.st_mtime = mtime;
-                }
+
+                    else if (getmtime)
+                    {
+                        uint64_t mtime = 0;
+                        if ((rc = sdmc_getmtime(session->buffer, &mtime)) == 0)
+                            st.st_mtime = mtime;
+                    }
             }
             else
             {
@@ -2204,6 +2172,9 @@ list_transfer(ftp_session_t* session)
                 }
             }
 #else
+            /* lstat the entry */
+            if ((rc = build_path(session, session->lwd, dent->d_name)) == 0)
+                rc = lstat(session->buffer, &st);
 
             if (rc != 0)
             {
@@ -2243,11 +2214,7 @@ list_transfer(ftp_session_t* session)
         {
             if (errno == EWOULDBLOCK)
                 return LOOP_EXIT;
-            
         }
-        else
-            
-
         ftp_session_set_state(session, COMMAND_STATE, CLOSE_PASV | CLOSE_DATA);
         ftp_send_response(session, 426, "Connection broken during transfer\r\n");
         return LOOP_EXIT;
@@ -2302,12 +2269,10 @@ retrieve_transfer(ftp_session_t* session)
         {
             if (errno == EWOULDBLOCK)
                 return LOOP_EXIT;
-            
         }
         else
-            
 
-        ftp_session_set_state(session, COMMAND_STATE, CLOSE_PASV | CLOSE_DATA);
+            ftp_session_set_state(session, COMMAND_STATE, CLOSE_PASV | CLOSE_DATA);
         ftp_send_response(session, 426, "Connection broken during transfer\r\n");
         return LOOP_EXIT;
     }
@@ -2339,7 +2304,6 @@ store_transfer(ftp_session_t* session)
             {
                 if (errno == EWOULDBLOCK)
                     return LOOP_EXIT;
-                
             }
 
             ftp_session_set_state(session, COMMAND_STATE, CLOSE_PASV | CLOSE_DATA);
@@ -3189,7 +3153,6 @@ FTP_DECLARE(OPTS)
  */
 FTP_DECLARE(PASS)
 {
-    
     ftp_auth_check(session, NULL, args);
 }
 
