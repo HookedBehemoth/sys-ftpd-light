@@ -2,8 +2,6 @@
 #include <string.h>
 #include <switch.h>
 
-#include "util.h"
-
 void flash_led_connect()
 {
     HidsysNotificationLedPattern pattern;
@@ -12,7 +10,7 @@ void flash_led_connect()
     // Setup Breathing effect pattern data.
     pattern.baseMiniCycleDuration = 0x8; // 100ms.
     pattern.totalMiniCycles = 0x2;       // 3 mini cycles. Last one 12.5ms.
-    pattern.totalFullCycles = 0x0;       // Repeat forever.
+    pattern.totalFullCycles = 0x3;       // Repeat forever.
     pattern.startIntensity = 0x2;        // 13%.
 
     pattern.miniCycles[0].ledIntensity = 0xF;      // 100%.
